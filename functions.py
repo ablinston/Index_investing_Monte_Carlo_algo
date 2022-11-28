@@ -41,7 +41,6 @@ def calculate_profit_vector(data,
     results_data = pl.DataFrame({"buy_trigger": np.array(buy_triggers, dtype = float),
                                  "sell_trigger": np.array(sell_triggers, dtype = float),
                                  "shares_held": np.array([0] * len(buy_triggers), dtype = float),
-                                 "last_high": np.array([0] * len(buy_triggers), dtype = float),
                                  "buy_price": np.array([data["Open"][1]] * len(buy_triggers), dtype = float),
                                  "sell_price": np.array([1e6] * len(buy_triggers), dtype = float),
                                  "cash_balance": np.array([initial_balance] * len(buy_triggers), dtype = float),
@@ -81,6 +80,11 @@ def calculate_profit_vector(data,
                                                  pl.col("shares_held") *
                                                  pl.col("sell_price")
                                                  ).alias("cash_balance"))
+        
+        # See if we set a new high and set buy price accordingly
+        results_data = results_data.with_columns(((pl.lit(1) + pl.col("buy_trigger")) *
+                                                  pl.lit(data["ATH"][i])
+                                                  ).alias("buy_price"))
                                 
         # Check if we've hit a day for buying before reseting bet (so we don't buy and sell on same day)
         results_data = results_data.with_column(((pl.col("shares_held") == pl.lit(0)) &
@@ -123,16 +127,6 @@ def calculate_profit_vector(data,
                                                  pl.col("shares_held") * pl.lit(data["Close"][i])
                                                  ).alias("total_value"))
         
-        # See if we set a new high and set buy price accordingly
-        if (results_data["last_high"].max() < data["High"][i]):
-            results_data = results_data.with_column((pl.lit(data["High"][i])
-                                                     ).alias("last_high"))
-            # If we did, calculate new buy_prices
-            results_data = results_data.with_columns(((pl.lit(1) + pl.col("buy_trigger")) *
-                                                      pl.col("last_high")
-                                                      ).alias("buy_price"))
-        
-        
         if daily_values:
             # Add balance to the data frame
             daily_balance_data = pl.concat([daily_balance_data,
@@ -161,9 +155,8 @@ def calculate_profit_vector(data,
 # This function calculates profits for single years only
 def calculate_profit_yearly(data, 
                             buy_triggers, # a list of values
-                            sell_triggers, 
-                            stop_losses,
-                            max_exposure, 
+                            sell_triggers,
+                            assumed_annual_dividend,
                             initial_balance, 
                             end_loss = False):
 
@@ -180,12 +173,10 @@ def calculate_profit_yearly(data,
 
     daily_data = calculate_profit_vector(data, 
                                         pd.Series(buy_triggers), # input as a Series
-                                        pd.Series(sell_triggers), 
-                                        pd.Series(stop_losses),
-                                        max_exposure = max_exposure, 
-                                        initial_balance = initial_balance / len(buy_triggers), 
-                                        end_loss = end_loss,
-                                        daily_balances = True).to_pandas()
+                                        pd.Series(sell_triggers),
+                                        assumed_annual_dividend = assumed_annual_dividend,
+                                        initial_balance = initial_balance / len(buy_triggers),
+                                        daily_values = True).to_pandas()
     
     # Split the date column
     daily_data[["Year", "Month", "Day"]] = daily_data["Date"].str.split("-", expand = True)
@@ -193,11 +184,11 @@ def calculate_profit_yearly(data,
     yearly_data = daily_data.groupby("Year", as_index = False).last()
     
     # Add yearly return
-    yearly_data["prior_balance"] = yearly_data["balance"].shift(1)
-    yearly_data["annual_return"] = 100 * (yearly_data["balance"] / yearly_data["prior_balance"] - 1)
+    yearly_data["prior_total_value"] = yearly_data["total_value"].shift(1)
+    yearly_data["annual_return"] = 100 * (yearly_data["total_value"] / yearly_data["prior_total_value"] - 1)
     
     # Calculate CAGR
-    cagr = round(((daily_data.loc[len(daily_data.index) - 1, "balance"] / daily_data.loc[1, "balance"]
+    cagr = round(((daily_data.loc[len(daily_data.index) - 1, "total_value"] / daily_data.loc[1, "total_value"]
             ) ** (1 / ((datetime.strptime(daily_data.loc[len(daily_data.index) - 1, "Date"],
                                        "%Y-%m-%d") -
                      datetime.strptime(daily_data.loc[1, "Date"],
@@ -205,7 +196,7 @@ def calculate_profit_yearly(data,
     
     print(f"CAGR rate is {cagr}%")
     
-    return yearly_data.loc[1:, ["Year", "balance", "annual_return", "trades_won", "trades_lost"]]
+    return yearly_data.loc[1:, ["Year", "total_value", "annual_return", "trades"]]
 
 
    

@@ -7,6 +7,7 @@ import statistics as st
 import os
 import time
 from datetime import datetime
+from datetime import timedelta
 from itertools import product
 import polars as pl
 
@@ -24,8 +25,14 @@ raw_prices["Date_ft"] = raw_prices["Date"].apply(lambda x: datetime.strptime(x, 
 raw_prices["Year"] = raw_prices["Date_ft"].apply(lambda x: x.year)
 raw_prices["Month"] = raw_prices["Date_ft"].apply(lambda x: x.month)
 
+# Add all-time high
+for date in raw_prices["Date_ft"]:
+    raw_prices.loc[raw_prices["Date_ft"] == date, "ATH"] = raw_prices[raw_prices["Date_ft"] <= date]["High"].max()
+
 # Convert to a polars data frame for speed
 #raw_prices = pl.DataFrame(raw_prices)
+
+raw_prices[raw_prices["Date_ft"] <= date]["High"].max()
 
 prices_by_month_year = raw_prices.groupby(by = ["Year", "Month"]).mean(numeric_only = True)
 prices_by_month_year.head()
@@ -49,8 +56,8 @@ global_assumed_annual_dividend = 0.03
 
 # len(initial_buy_prices) * len(initial_sell_prices)
 
-train_data = raw_prices[raw_prices["Year"] < 2007].reset_index(drop = True)
-test_data = raw_prices[raw_prices["Year"] >= 2007].reset_index(drop = True)
+train_data = raw_prices[raw_prices["Year"] > 1995].reset_index(drop = True)
+test_data = raw_prices[raw_prices["Year"] >= 2008].reset_index(drop = True)
 
 
     
@@ -61,7 +68,7 @@ start_time = time.time()
 
 # Vectorised
 initial_buy_triggers = list(np.linspace(-0.5, 0, 100))
-initial_sell_triggers = list(np.linspace(0.5, 10, 100))
+initial_sell_triggers = list(np.linspace(0.5, 10, 1000))
 
 results = pd.DataFrame(list(product(initial_buy_triggers, 
                                     initial_sell_triggers)),
@@ -100,59 +107,17 @@ print(best_results["Buy"].min())
 print(best_results["Buy"].max())
 print(best_results["Sell"].min())
 print(best_results["Sell"].max())
-print(best_results["Stop"].min())
-print(best_results["Stop"].max())
 
-##########################################
-# Do a more focussed run on a more narrowed range
-
-start_time = time.time()
-
-# Vectorised
-initial_buy_prices = list(np.linspace(28, 29, 100))
-initial_sell_prices = list(np.linspace(35, 36.5, 100))
-initial_stop_losses = list(np.linspace(27, 28, 100))
-
-results = pd.DataFrame(list(product(initial_buy_prices, 
-                                    initial_sell_prices,
-                                    initial_stop_losses)),
-                       columns = ["Buy", "Sell", "Stop"])
-
-# Remove where buy > sell
-results = results[results.Sell > (results.Buy + 0.2)] # spread added
-results = results[results.Buy > (results.Stop + 0.2)] # spread added
-
-results["profit"], results["trades_won"], results["trades_lost"] = (
-    calculate_profit_vector(train_data,
-                            results["Buy"],
-                            results["Sell"],
-                            results["Stop"],
-                            max_exposure = max_exposure,
-                            initial_balance = init_balance,
-                            end_loss = global_end_loss))
-
-print("--- %s seconds ---" % (time.time() - start_time))
-
-print(results.sort_values("profit", ascending = False))
-print(results.sort_values("profit", ascending = False)[["Buy", "Sell", "Stop", "profit"]])
-print(results[results["trades_lost"]<1000].sort_values("profit", ascending = False))
-
-results["max_profit"] = results["profit"].max()
-# Work out the range within 5%
-best_results = results[results.profit > 0.75 * results.max_profit]
-
-print(best_results["Buy"].min())
-print(best_results["Buy"].max())
-print(best_results["Sell"].min())
-print(best_results["Sell"].max())
-print(best_results["Stop"].min())
-print(best_results["Stop"].max())
 
 ##########################################
 
 # Test the model
 
-calculate_profit_yearly(test_data, [28.31], [35.6], [27.45], max_exposure = max_exposure, initial_balance = init_balance, end_loss = global_end_loss)
+# Benchmark
+
+calculate_profit_yearly(test_data, [0], [1e6], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
+
+calculate_profit_yearly(test_data, [-0.20], [1], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
 
 calculate_profit_yearly(raw_prices, [10], [14], [0], max_exposure = max_exposure, initial_balance = init_balance, end_loss = global_end_loss)
 
