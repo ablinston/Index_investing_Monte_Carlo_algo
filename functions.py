@@ -18,13 +18,16 @@ def calculate_profit_vector(data,
 # =============================================================================
 #     # For debugging
 #     data = raw_prices
-#     buy_triggers = pd.Series([-0.2, -0.3])
-#     sell_triggers = pd.Series([1, 0.5])
+#     buy_triggers = pd.Series([0])
+#     sell_triggers = pd.Series([1e6])
 #     assumed_annual_dividend = 0.03
 #     initial_balance = 10000
 #     daily_values = True
 # =============================================================================
     
+    # Sort by date
+    data = data.sort_values("Date_ft")
+
     # To avoid errors, reset the index
     data = data.reset_index(drop = True)
     
@@ -39,19 +42,20 @@ def calculate_profit_vector(data,
                                  "sell_trigger": np.array(sell_triggers, dtype = float),
                                  "shares_held": np.array([0] * len(buy_triggers), dtype = float),
                                  "last_high": np.array([0] * len(buy_triggers), dtype = float),
-                                 "buy_price": np.array([1e6] * len(buy_triggers), dtype = float),
+                                 "buy_price": np.array([data["Open"][1]] * len(buy_triggers), dtype = float),
                                  "sell_price": np.array([1e6] * len(buy_triggers), dtype = float),
                                  "cash_balance": np.array([initial_balance] * len(buy_triggers), dtype = float),
                                  "total_value": np.array([0] * len(buy_triggers), dtype = float),
                                  "trades": np.array([0] * len(buy_triggers), dtype = float)})
        
-    daily_balance_data = pl.DataFrame({"Date_ft": [datetime.strptime("1900-01-01", "%Y-%m-%d")],
+    daily_balance_data = pl.DataFrame({"Date": ["1900-01-01"],
                                        "High": [0.1],
                                        "Low": [0.1],
                                        "buy_price": np.array([0], dtype = float),
                                        "sell_price": np.array([0], dtype = float),
                                        "shares_held": np.array([0], dtype = float),
                                        "trades": np.array([0], dtype = float),
+                                       "cash_balance": np.array([0], dtype = float),
                                        "total_value": np.array([0], dtype = float)})
         
 # =============================================================================
@@ -63,24 +67,24 @@ def calculate_profit_vector(data,
     for i in range(1, (len(data.index) - 1)):
        
         # Calculate overnight reinvested dividends as an increase to holding
-        results_data = results_data.with_column((pl.col("shares_held") * pl.lit(assumed_annual_dividend ** (1/365))
+        results_data = results_data.with_column((pl.col("shares_held") * pl.lit((1 + assumed_annual_dividend) ** (1/365))
                                                 ).alias("shares_held"))
         
         # Check if we've hit a selling opportunity in the day
         results_data = results_data.with_column(((pl.col("shares_held") > pl.lit(0)) &
-                                                 (pl.col("sell_price") <= pl.lit(data["Low"][i]))
+                                                 (pl.col("sell_price") <= pl.lit(data["High"][i]))
                                                  ).alias("sell_ind"))
         
         # Sell out holding for those where it's true
         results_data = results_data.with_column((pl.col("cash_balance") + 
                                                  pl.col("sell_ind") *
                                                  pl.col("shares_held") *
-                                                 (pl.col("sell_price") - pl.col("buy_price"))
+                                                 pl.col("sell_price")
                                                  ).alias("cash_balance"))
                                 
         # Check if we've hit a day for buying before reseting bet (so we don't buy and sell on same day)
         results_data = results_data.with_column(((pl.col("shares_held") == pl.lit(0)) &
-                                                 (pl.col("buy_price") >= pl.lit(data["High"][i])))
+                                                 (pl.col("buy_price") >= pl.lit(data["Low"][i])))
                                                 .alias("buy_ind"))
         
         # Now sell the holding if necessary
@@ -108,7 +112,10 @@ def calculate_profit_vector(data,
                                                 .alias("trades"))
         
         # Set the sell price
-        results_data = results_data.with_column((pl.col("sell_trigger") * pl.col("buy_price")
+        results_data = results_data.with_column((pl.when(pl.col("buy_ind"))
+                                                 .then((pl.lit(1) + pl.col("sell_trigger")) *
+                                                       pl.col("buy_price"))
+                                                 .otherwise(pl.col("sell_price"))
                                                  ).alias("sell_price"))
         
         # Calculate the total valuation today
@@ -121,20 +128,22 @@ def calculate_profit_vector(data,
             results_data = results_data.with_column((pl.lit(data["High"][i])
                                                      ).alias("last_high"))
             # If we did, calculate new buy_prices
-            results_data = results_data.with_columns((pl.col("buy_trigger") * pl.col("last_high")
+            results_data = results_data.with_columns(((pl.lit(1) + pl.col("buy_trigger")) *
+                                                      pl.col("last_high")
                                                       ).alias("buy_price"))
         
         
         if daily_values:
             # Add balance to the data frame
             daily_balance_data = pl.concat([daily_balance_data,
-                                            pl.concat([pl.DataFrame({"Date":[str(data["Date"][i])] * len(results_data),
+                                            pl.concat([pl.DataFrame({"Date": [datetime.strftime(data["Date_ft"][i], "%Y-%m-%d")] * len(results_data),
                                                                      "High":[data["High"][i]] * len(results_data),
                                                                      "Low":[data["Low"][i]] * len(results_data)}),
                                                                    results_data.select(["buy_price", 
                                                                                         "sell_price", 
                                                                                         "shares_held",
                                                                                         "trades",
+                                                                                        "cash_balance",
                                                                                         "total_value"])],
                                                       how = "horizontal")])
         

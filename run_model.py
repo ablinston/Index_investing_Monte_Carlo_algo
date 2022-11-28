@@ -68,7 +68,7 @@ results = pd.DataFrame(list(product(initial_buy_triggers,
                        columns = ["Buy", "Sell"])
 
 # Add control to beginning
-results.loc[-1] = [0, 1e6]
+results.loc[-1] = [0, 100]
 
 results["profit"], results["trades"] = (
     calculate_profit_vector(train_data,
@@ -80,19 +80,16 @@ results["profit"], results["trades"] = (
 print("--- %s seconds ---" % (time.time() - start_time))
 
 print(results.sort_values("profit", ascending = False))
-print(results.sort_values("profit", ascending = False)[["Buy", "Sell", "Stop", "profit"]])
-print(results[results["trades_lost"]<1000].sort_values("profit", ascending = False))
+print(results.sort_values("profit", ascending = False)[["Buy", "Sell", "profit"]])
+print(results[results["trades"]>1].sort_values("profit", ascending = False))
 
 # Search for any clusters of profit
-plt.subplot(1, 3, 1)
+plt.subplot(1, 2, 1)
 plt.scatter(results["Buy"], results["profit"])
 plt.title("Buy")
-plt.subplot(1, 3, 2)
+plt.subplot(1, 2, 2)
 plt.scatter(results["Sell"], results["profit"])
 plt.title("Sell")
-plt.subplot(1, 3, 3)
-plt.scatter(results["Stop"], results["profit"])
-plt.title("Stop")
 plt.show()
 
 results["max_profit"] = results["profit"].max()
