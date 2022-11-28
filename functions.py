@@ -6,255 +6,126 @@ from datetime import datetime
 import polars as pl
 import pdb
 
-# =============================================================================
-# def calculate_profit(data, buy_price, sell_price, max_exposure = 1e10, initial_balance = 1e4, end_loss = True, overnight_rate = 0):
-#  
-#     # Initial variables
-#     hold = False
-#     shares = 0
-#     balance = initial_balance
-#     
-#     # Loop through each day
-#     for i in range(0, len(data.index)):
-#         # Check if we're on the last day and sell if so
-#         if ((i == len(data.index) - 1) & hold & end_loss):
-#             balance += (data["Open"][i] - buy_price) * shares
-#         # If we're already holding, look to sell
-#         elif hold:
-#             if data["High"][i] >= sell_price:
-#                 # Calculate the profit
-#                 balance += (sell_price - buy_price) * shares
-#                 # No long holding
-#                 hold = False
-#             else:
-#                 # We have to charge the overnight rate
-#                 pass
-#         else:
-#             # Check if there is an opportunity to buy
-#             if data["Low"][i] <= buy_price:
-#                 # Work out how many shares you have
-#                 shares = min(max_exposure, balance) / buy_price
-#                 hold = True
-#     return balance - initial_balance
-# =============================================================================
-
-# The overnight rate is a daily % based on sonia + 2.5% usually
-# SONIA has been between 4-8% until post 2008
-
-# =============================================================================
-# def calculate_profit(data, 
-#                      buy_price, 
-#                      sell_price, 
-#                      max_exposure = 1, # a proportion of balance to be bet
-#                      initial_balance = 1e4, 
-#                      end_loss = False, 
-#                      overnight_rate = (0.025 / 365),
-#                      daily_balances = False):
-#  
-#     # Initial variables
-#     hold = False
-#     bet_per_pt = 0
-#     balance = initial_balance
-#     
-#     daily_balance_data = pd.DataFrame({"Date":["1900-01-01"],
-#                                        "High":[0.1],
-#                                        "Low":[0.1],
-#                                        "bet_per_pt":[0.1],
-#                                        "balance":[0]})
-#     
-#     # Loop through each day
-#     for i in range(1, len(data.index)):
-#        
-#         # If we're already holding, look to sell
-#         if hold:
-#             # We have to charge the overnight rate
-#             balance -= (data["Date_ft"][i] - data["Date_ft"][i - 1]).days * data["Open"][i] * bet_per_pt * overnight_rate
-#             if data["High"][i] > sell_price:
-#                 # Calculate the profit
-#                 balance += (sell_price - buy_price - 0.15) * bet_per_pt
-#                 # No long holding
-#                 bet_per_pt = 0
-#                 hold = False
-#                 # Check if we're on the last day and sell if so
-#             elif ((i == len(data.index) - 1) & end_loss):
-#                 balance += (data["Open"][i] - buy_price - 0.15) * bet_per_pt
-#                 
-#         else:
-#             # Check if there is an opportunity to buy
-#             if (data["Low"][i] < buy_price) & (data["High"][i] > buy_price):
-#                 # Work out how many shares you have
-#                 bet_per_pt = max_exposure * balance / buy_price # always leave some balance to pay financing for a few years
-#                 hold = True
-#         
-#         if daily_balances:
-#             # Add balance to the data frame
-#             daily_balance_data = pd.concat([daily_balance_data,
-#                                         pd.DataFrame({"Date":[str(data["Date"][i])],
-#                                                       "High":[data["High"][i]],
-#                                                       "Low" :[data["Low"][i]],
-#                                                       "bet_per_pt": [bet_per_pt],
-#                                                       "balance":[balance]})],
-#                                        ignore_index = True)
-#     if daily_balances:
-#         
-#         # Convert Date column to proper date
-#         
-#         return daily_balance_data
-#     else:
-#         return balance - initial_balance
-# =============================================================================
 
 # This function calculates the profits for vectors of buy prices and corresponding sell prices
-def calculate_profit_vector(data, 
-                             buy_prices, 
-                             sell_prices, 
-                             stop_losses,
-                             max_exposure = 1, 
-                             initial_balance = 1e4, 
-                             end_loss = False,
-                             daily_balances = False):
+def calculate_profit_vector(data,
+                            buy_triggers, # a vector of proportions of changes in the index from a previous high
+                            sell_triggers, # a vector of proportion increases in the index from a buy point,
+                            assumed_annual_dividend, # a proportion yield assumed for holding
+                            initial_balance = 1e4,
+                            daily_values = False):
  
-    # For debugging
 # =============================================================================
-#     data = train_data
-#     buy_prices = results["Buy"]
-#     sell_prices = results["Sell"]
-#     stop_losses = results["Stop"]
-#     max_exposure = 0.5
+#     # For debugging
+#     data = raw_prices
+#     buy_triggers = pd.Series([-0.2, -0.3])
+#     sell_triggers = pd.Series([1, 0.5])
+#     assumed_annual_dividend = 0.03
 #     initial_balance = 10000
-#     end_loss = False
-#     daily_balances = False
+#     daily_values = True
 # =============================================================================
     
     # To avoid errors, reset the index
     data = data.reset_index(drop = True)
-
-    # Initial variables
-    results_data = pl.DataFrame({"buy_price": np.array(buy_prices, dtype = float),
-                                 "sell_price": np.array(sell_prices, dtype = float),
-                                 "stop_loss": np.array(stop_losses, dtype = float),
-                                 "bet_per_pt": np.array([0] * len(buy_prices), dtype = float),
-                                 "balance": np.array([initial_balance] * len(buy_prices), dtype = float),
-                                 "trades_won": np.array([0] * len(buy_prices), dtype = float),
-                                 "trades_lost": np.array([0] * len(buy_prices), dtype = float)})
-       
-    results_data = results_data.with_column((pl.col("sell_price") - pl.col("buy_price") - 0.15).alias("buy_sell_diff")) # includes the spread paid deducted
-    results_data = results_data.with_column((pl.col("stop_loss") - pl.col("buy_price") - 0.15).alias("stop_loss_diff"))
     
-    daily_balance_data = pl.DataFrame({"Date": ["1900-01-01"],
+# =============================================================================
+#     # Set up a control run which is buy and hold
+#     buy_triggers = pd.concat([pd.Series([1]), buy_triggers])
+#     sell_triggers = pd.concat([pd.Series([1e6]), sell_triggers])
+#     
+# =============================================================================
+    # Initial variables
+    results_data = pl.DataFrame({"buy_trigger": np.array(buy_triggers, dtype = float),
+                                 "sell_trigger": np.array(sell_triggers, dtype = float),
+                                 "shares_held": np.array([0] * len(buy_triggers), dtype = float),
+                                 "last_high": np.array([0] * len(buy_triggers), dtype = float),
+                                 "buy_price": np.array([1e6] * len(buy_triggers), dtype = float),
+                                 "sell_price": np.array([1e6] * len(buy_triggers), dtype = float),
+                                 "cash_balance": np.array([initial_balance] * len(buy_triggers), dtype = float),
+                                 "total_value": np.array([0] * len(buy_triggers), dtype = float),
+                                 "trades": np.array([0] * len(buy_triggers), dtype = float)})
+       
+    daily_balance_data = pl.DataFrame({"Date_ft": [datetime.strptime("1900-01-01", "%Y-%m-%d")],
                                        "High": [0.1],
                                        "Low": [0.1],
                                        "buy_price": np.array([0], dtype = float),
                                        "sell_price": np.array([0], dtype = float),
-                                       "bet_per_pt":[0.1],
-                                       "balance": np.array([0], dtype = float),
-                                       "trades_won": np.array([0], dtype = float),
-                                       "trades_lost": np.array([0], dtype = float)})
+                                       "shares_held": np.array([0], dtype = float),
+                                       "trades": np.array([0], dtype = float),
+                                       "total_value": np.array([0], dtype = float)})
         
+# =============================================================================
+#     # Manually set the control to buy on the first day
+#     results_data[0, "buy_price"] = data["High"][1]
+# =============================================================================
     
     # Loop through each day
     for i in range(1, (len(data.index) - 1)):
        
-        # Calculate overnight costs
-        results_data = results_data.with_column((pl.col("bet_per_pt") * 
-                                                 pl.lit((data["Date_ft"][i] - data["Date_ft"][i - 1]).days) * 
-                                                 pl.lit(data["overnight_cost_per_pt"][i])
-                                                ).alias("overnight_costs"))
-                                                
-        # Update balances with costs
-        results_data = results_data.with_column((pl.col("balance") - pl.col("overnight_costs")).alias("balance"))
-        
-        # Check if we hit a stop loss during the day
-        results_data = results_data.with_column(((pl.col("stop_loss") >= pl.lit(data["Low"][i])) & 
-                                                  (pl.col("bet_per_pt") > pl.lit(0))
-                                                 ).alias("stopped_ind"))
-        
-        # Sell out holding for those where it's true
-        results_data = results_data.with_column((pl.col("balance") + 
-                                                 (pl.col("stop_loss_diff") *
-                                                  pl.col("bet_per_pt") *
-                                                  pl.col("stopped_ind"))
-                                                 ).alias("balance"))
+        # Calculate overnight reinvested dividends as an increase to holding
+        results_data = results_data.with_column((pl.col("shares_held") * pl.lit(assumed_annual_dividend ** (1/365))
+                                                ).alias("shares_held"))
         
         # Check if we've hit a selling opportunity in the day
-        results_data = results_data.with_column(((~pl.col("stopped_ind")) &
-                                                 (pl.col("bet_per_pt") > pl.lit(0)) &
-                                                 (pl.col("sell_price") < pl.lit(data["High"][i]))
+        results_data = results_data.with_column(((pl.col("shares_held") > pl.lit(0)) &
+                                                 (pl.col("sell_price") <= pl.lit(data["Low"][i]))
                                                  ).alias("sell_ind"))
         
         # Sell out holding for those where it's true
-        results_data = results_data.with_column((pl.col("balance") + 
+        results_data = results_data.with_column((pl.col("cash_balance") + 
                                                  pl.col("sell_ind") *
-                                                 pl.col("bet_per_pt") *
-                                                 pl.col("buy_sell_diff")
-                                                 ).alias("balance"))
-        
-        # Calculate running tally of wins and losses
-        results_data = results_data.with_column((pl.when((pl.col("balance") <= pl.lit(0)) & 
-                                                         (pl.col("bet_per_pt") == pl.lit(0)))
-                                                 .then(pl.col("trades_won"))
-                                                 .otherwise(pl.col("trades_won") + pl.lit(1) * pl.col("sell_ind"))
-                                                 ).alias("trades_won"))
-        
-        results_data = results_data.with_column((pl.when((pl.col("balance") <= pl.lit(0)) & 
-                                                         (pl.col("bet_per_pt") == pl.lit(0)))
-                                                 .then(pl.col("trades_lost"))
-                                                 .otherwise(pl.col("trades_lost") + pl.lit(1) * pl.col("stopped_ind"))
-                                                 ).alias("trades_lost"))
-                        
+                                                 pl.col("shares_held") *
+                                                 (pl.col("sell_price") - pl.col("buy_price"))
+                                                 ).alias("cash_balance"))
+                                
         # Check if we've hit a day for buying before reseting bet (so we don't buy and sell on same day)
-        results_data = results_data.with_column(((pl.col("bet_per_pt") == pl.lit(0)) &
-                                                 (pl.col("buy_price") < pl.lit(data["High"][i])) &
-                                                 (pl.col("buy_price") > pl.lit(data["Low"][i])))
+        results_data = results_data.with_column(((pl.col("shares_held") == pl.lit(0)) &
+                                                 (pl.col("buy_price") >= pl.lit(data["High"][i])))
                                                 .alias("buy_ind"))
         
-        # Set the bet to 0 if sell indicator flagged
-        results_data = results_data.with_column((pl.when(pl.col("sell_ind") | pl.col("stopped_ind")).
-                                                 then(pl.lit(0)).
-                                                 otherwise(pl.col("bet_per_pt")))
-                                                 .alias("bet_per_pt"))
-        
-        # Work out the size of bet available                
-        # Now bet on the shares where appropriate
+        # Now sell the holding if necessary
+        results_data = results_data.with_columns((pl.col("shares_held") *
+                                                  (~pl.col("sell_ind"))
+                                                  ).alias("shares_held"))
+                
+        # Now execute the buy where appropriate
         results_data = results_data.with_column((pl.when(pl.col("buy_ind"))
-                                                 .then(pl.col("balance") *
-                                                       pl.lit(max_exposure) /
+                                                 .then((pl.col("cash_balance") - pl.lit(25)) / # trading cost
                                                        pl.col("buy_price"))
-                                                 .otherwise(pl.col("bet_per_pt")))
-                                                .alias("bet_per_pt"))
+                                                 .otherwise(pl.col("shares_held")))
+                                                .alias("shares_held"))
         
-        # Check whether the trade gets stopped out at the end of the day
-        # Check if we hit a stop loss during the day
-        results_data = results_data.with_column(((pl.col("stop_loss") >= pl.lit(data["Close"][i])) & 
-                                                  (pl.col("bet_per_pt") > pl.lit(0))
-                                                 ).alias("stopped_ind"))
-        
-        # Sell out holding for those where it's true
-        results_data = results_data.with_column((pl.col("balance") + 
-                                                 ((pl.lit(data["Close"][i]) - pl.col("buy_price") - 0.15) *
-                                                  pl.col("bet_per_pt") *
-                                                  pl.col("stopped_ind"))
-                                                 ).alias("balance"))
-
-        # Set the bet to 0 if sell indicator flagged
-        results_data = results_data.with_column((pl.when(pl.col("stopped_ind")).
-                                                 then(pl.lit(0)).
-                                                 otherwise(pl.col("bet_per_pt")))
-                                                 .alias("bet_per_pt"))
-        
-        # Check whether balance has gone to 0 and reset variables if so
-        results_data = results_data.with_column((pl.when(pl.col("balance") <= 0)
+        # Update the cash balance
+        results_data = results_data.with_column((pl.when(pl.col("buy_ind"))
                                                  .then(pl.lit(0))
-                                                 .otherwise(pl.col("balance"))
-                                                 ).alias("balance"))
+                                                 .otherwise(pl.col("cash_balance")))
+                                                .alias("cash_balance"))
         
-        results_data = results_data.with_column((pl.when(pl.col("balance") <= 0)
-                                                 .then(pl.lit(0))
-                                                 .otherwise(pl.col("bet_per_pt"))
-                                                 ).alias("bet_per_pt"))
+        # Count the trade
+        results_data = results_data.with_column((pl.when(pl.col("buy_ind"))
+                                                 .then(pl.col("trades") + pl.lit(1))
+                                                 .otherwise(pl.col("trades")))
+                                                .alias("trades"))
+        
+        # Set the sell price
+        results_data = results_data.with_column((pl.col("sell_trigger") * pl.col("buy_price")
+                                                 ).alias("sell_price"))
+        
+        # Calculate the total valuation today
+        results_data = results_data.with_column((pl.col("cash_balance") +
+                                                 pl.col("shares_held") * pl.lit(data["Close"][i])
+                                                 ).alias("total_value"))
+        
+        # See if we set a new high and set buy price accordingly
+        if (results_data["last_high"].max() < data["High"][i]):
+            results_data = results_data.with_column((pl.lit(data["High"][i])
+                                                     ).alias("last_high"))
+            # If we did, calculate new buy_prices
+            results_data = results_data.with_columns((pl.col("buy_trigger") * pl.col("last_high")
+                                                      ).alias("buy_price"))
         
         
-        if daily_balances:
+        if daily_values:
             # Add balance to the data frame
             daily_balance_data = pl.concat([daily_balance_data,
                                             pl.concat([pl.DataFrame({"Date":[str(data["Date"][i])] * len(results_data),
@@ -262,34 +133,26 @@ def calculate_profit_vector(data,
                                                                      "Low":[data["Low"][i]] * len(results_data)}),
                                                                    results_data.select(["buy_price", 
                                                                                         "sell_price", 
-                                                                                        "bet_per_pt",
-                                                                                        "balance",
-                                                                                        "trades_won",
-                                                                                        "trades_lost"])],
+                                                                                        "shares_held",
+                                                                                        "trades",
+                                                                                        "total_value"])],
                                                       how = "horizontal")])
         
-    # On the last day, sell out if necessary
-    if end_loss:
-        results_data = results_data.with_column((pl.col("balance") +
-                                                 pl.col("bet_per_pt") *
-                                                 (pl.lit(data["Open"][len(data.index) - 1]) - pl.col("buy_price") - pl.lit(0.15))
-                                                 ).alias("balance"))
-        
     # Calculate profits
-    results_data = results_data.with_column((pl.col("balance") - initial_balance)
+    results_data = results_data.with_column((pl.col("total_value") - initial_balance)
                                             .alias("profit"))
     
-    if daily_balances:
+    if daily_values:
         return daily_balance_data
     else:        
-        return results_data[["profit", "trades_won", "trades_lost"]]
+        return results_data[["profit", "trades"]]
 
 
 
 # This function calculates profits for single years only
 def calculate_profit_yearly(data, 
-                            buy_prices, # a list of values
-                            sell_prices, 
+                            buy_triggers, # a list of values
+                            sell_triggers, 
                             stop_losses,
                             max_exposure, 
                             initial_balance, 
@@ -298,8 +161,8 @@ def calculate_profit_yearly(data,
 # =============================================================================
 #     # For debugging
 #     data = test_data
-#     buy_prices = [20.1]
-#     sell_prices = [30.1]
+#     buy_triggers = [20.1]
+#     sell_triggers = [30.1]
 #     stop_losses = [15]
 #     max_exposure = 0.5
 #     initial_balance = 20000
@@ -307,11 +170,11 @@ def calculate_profit_yearly(data,
 # =============================================================================
 
     daily_data = calculate_profit_vector(data, 
-                                        pd.Series(buy_prices), # input as a Series
-                                        pd.Series(sell_prices), 
+                                        pd.Series(buy_triggers), # input as a Series
+                                        pd.Series(sell_triggers), 
                                         pd.Series(stop_losses),
                                         max_exposure = max_exposure, 
-                                        initial_balance = initial_balance / len(buy_prices), 
+                                        initial_balance = initial_balance / len(buy_triggers), 
                                         end_loss = end_loss,
                                         daily_balances = True).to_pandas()
     
@@ -341,8 +204,8 @@ def calculate_profit_yearly(data,
 def monte_carlo_test_runs(data,
                             n_iterations,
                             n_years,
-                            buy_prices, 
-                            sell_prices, 
+                            buy_triggers, 
+                            sell_triggers, 
                             stop_losses,
                             max_exposure = 1, 
                             initial_balance = 1e4, 
@@ -356,8 +219,8 @@ def monte_carlo_test_runs(data,
 #      data = raw_prices
 #      n_iterations = 2
 #      n_years = 1
-#      buy_prices = [20.1] 
-#      sell_prices = [30.1]
+#      buy_triggers = [20.1] 
+#      sell_triggers = [30.1]
 #      stop_losses = [20]
 #      max_exposure = 0.5
 #      initial_balance = 1e4 
@@ -392,7 +255,7 @@ def monte_carlo_test_runs(data,
         data_subset = data_subset.reset_index(drop = True)
         
         # Prepare inputs for the model
-        results = pd.DataFrame(list(product(buy_prices, sell_prices, stop_losses)),
+        results = pd.DataFrame(list(product(buy_triggers, sell_triggers, stop_losses)),
                                columns = ["Buy", "Sell", "Stop"])
         
         # Now work out the best buy and sell
@@ -402,7 +265,7 @@ def monte_carlo_test_runs(data,
                                     results["Sell"],
                                     results["Stop"],
                                     max_exposure = max_exposure,
-                                    initial_balance = (initial_balance / len(buy_prices)), # split the balance across the strategies being run
+                                    initial_balance = (initial_balance / len(buy_triggers)), # split the balance across the strategies being run
                                     end_loss = end_loss))
         
         # Now add the results to the stack
