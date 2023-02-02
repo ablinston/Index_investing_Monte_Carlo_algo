@@ -11,10 +11,10 @@ from datetime import timedelta
 from itertools import product
 import polars as pl
 
-os.chdir("C:/Users/Andy/Documents/Index_trading")
+os.chdir("C:/Users/Andy/Documents/Index_investing_Monte_Carlo_algo")
 
 # Load custom functions
-execfile('functions.py')
+exec(open('functions.py').read())
 
 # Read in data
 raw_prices = pd.read_csv("FTSE250.csv")
