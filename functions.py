@@ -304,6 +304,7 @@ def fast_monte_carlo_test_runs(data,
 #     sell_trigger = 2.1
 #     initial_balance = 1e4 
 #     years_hard_limit = False
+#     assumed_annual_dividend = 0.03
 # =============================================================================
 # =============================================================================
 
@@ -482,7 +483,7 @@ def fast_monte_carlo_test_runs(data,
         # Drop columns with today's data ready for next day
         results_stack = results_stack.drop(["Open", "High",
                                             "Low", "Close", "Date_ft", "Year", 
-                                            "Month", "ATH"])
+                                            "Month", "ATH", "discount"])
         
         #######################################
         

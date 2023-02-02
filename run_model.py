@@ -102,8 +102,8 @@ plt.title("Sell")
 plt.show()
 
 results["max_alpha"] = results["alpha"].max()
-# Work out the range within 5%
-best_results = results[results.alpha > 0.5 * results.max_alpha]
+# Work out the range within 50%
+best_results = results[results.alpha > 0.2 * results.max_alpha]
 
 print(best_results["Buy"].min())
 print(best_results["Buy"].max())
@@ -119,7 +119,7 @@ print(best_results["Sell"].max())
 
 calculate_alpha_yearly(test_data, [0], [1e6], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
 
-calculate_alpha_yearly(test_data, [-0.40], [2], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
+calculate_alpha_yearly(test_data, [-0.20], [4.5], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
 
 
 
@@ -142,8 +142,8 @@ monte_carlo = fast_monte_carlo_test_runs(
     data = raw_prices,
     n_iterations = 1000,
     min_years = 10,
-    buy_trigger = -0.4, 
-    sell_trigger = 2.0,
+    buy_trigger = -0.3, 
+    sell_trigger = 4.0,
     initial_balance = init_balance, 
     assumed_annual_dividend = global_assumed_annual_dividend)
 
