@@ -29,6 +29,8 @@ raw_prices["Month"] = raw_prices["Date_ft"].apply(lambda x: x.month)
 for date in raw_prices["Date_ft"]:
     raw_prices.loc[raw_prices["Date_ft"] == date, "ATH"] = raw_prices[raw_prices["Date_ft"] <= date]["High"].max()
 
+raw_prices["discount"] = raw_prices["Open"] / raw_prices["ATH"] - 1
+
 # Convert to a polars data frame for speed
 #raw_prices = pl.DataFrame(raw_prices)
 
@@ -62,7 +64,7 @@ test_data = raw_prices[raw_prices["Year"] >= 2008].reset_index(drop = True)
 
     
 ##########################################
-# First find a rough idea where profitable trading rules are
+# First find a rough idea where alphaable trading rules are
 
 start_time = time.time()
 
@@ -77,8 +79,8 @@ results = pd.DataFrame(list(product(initial_buy_triggers,
 # Add control to beginning
 results.loc[-1] = [0, 100]
 
-results["profit"], results["trades"] = (
-    calculate_profit_vector(train_data,
+results["alpha"], results["trades"] = (
+    calculate_alpha_vector(train_data,
                             results["Buy"],
                             results["Sell"],
                             initial_balance = init_balance,
@@ -86,22 +88,22 @@ results["profit"], results["trades"] = (
 
 print("--- %s seconds ---" % (time.time() - start_time))
 
-print(results.sort_values("profit", ascending = False))
-print(results.sort_values("profit", ascending = False)[["Buy", "Sell", "profit"]])
-print(results[results["trades"]>1].sort_values("profit", ascending = False))
+print(results.sort_values("alpha", ascending = False))
+print(results.sort_values("alpha", ascending = False)[["Buy", "Sell", "alpha"]])
+print(results[results["trades"]>1].sort_values("alpha", ascending = False))
 
-# Search for any clusters of profit
+# Search for any clusters of alpha
 plt.subplot(1, 2, 1)
-plt.scatter(results["Buy"], results["profit"])
+plt.scatter(results["Buy"], results["alpha"])
 plt.title("Buy")
 plt.subplot(1, 2, 2)
-plt.scatter(results["Sell"], results["profit"])
+plt.scatter(results["Sell"], results["alpha"])
 plt.title("Sell")
 plt.show()
 
-results["max_profit"] = results["profit"].max()
+results["max_alpha"] = results["alpha"].max()
 # Work out the range within 5%
-best_results = results[results.profit > 0.5 * results.max_profit]
+best_results = results[results.alpha > 0.5 * results.max_alpha]
 
 print(best_results["Buy"].min())
 print(best_results["Buy"].max())
@@ -115,61 +117,61 @@ print(best_results["Sell"].max())
 
 # Benchmark
 
-calculate_profit_yearly(test_data, [0], [1e6], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
+calculate_alpha_yearly(test_data, [0], [1e6], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
 
-calculate_profit_yearly(test_data, [-0.20], [1], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
+calculate_alpha_yearly(test_data, [-0.40], [2], assumed_annual_dividend = global_assumed_annual_dividend, initial_balance = init_balance)
 
-calculate_profit_yearly(raw_prices, [10], [14], [0], max_exposure = max_exposure, initial_balance = init_balance, end_loss = global_end_loss)
 
 
 ##########################################
 
 # Test the model with a monte carlo
 
-one_year_monte_carlo = monte_carlo_test_runs(data = test_data,
-                                             n_iterations = 1000,
-                                             n_years = 1,
-                                             buy_prices = [24.67], 
-                                             sell_prices = [37.28], 
-                                             stop_losses = [24.42],
-                                             max_exposure = 1, 
-                                             initial_balance = init_balance, 
-                                             end_loss = True)
+# =============================================================================
+# one_year_monte_carlo = monte_carlo_test_runs(data = raw_prices,
+#                                              n_iterations = 1000,
+#                                              n_years = 100,
+#                                              buy_triggers = [-0.4], 
+#                                              sell_triggers = [2],
+#                                              initial_balance = init_balance, 
+#                                              assumed_annual_dividend = global_assumed_annual_dividend)
+# =============================================================================
+
+
+monte_carlo = fast_monte_carlo_test_runs(
+    data = raw_prices,
+    n_iterations = 1000,
+    min_years = 10,
+    buy_trigger = -0.4, 
+    sell_trigger = 2.0,
+    initial_balance = init_balance, 
+    assumed_annual_dividend = global_assumed_annual_dividend)
 
 # Plot the results
-one_year_monte_carlo["Percent_profit"].plot.hist(grid = True,
-                                                 bins = 20)
+monte_carlo["CAGR_alpha"].plot.hist(grid = True, bins = 20)
 
-loser_info(one_year_monte_carlo)
-
-
-##########################################
-
-# Test the model with a monte carlo
-
-one_year_monte_carlo = monte_carlo_test_runs(data = raw_prices,
-                                             n_iterations = 1000,
-                                             n_years = 1,
-                                             buy_prices = [24.67], 
-                                             sell_prices = [37.28], 
-                                             stop_losses = [24.42],
-                                             max_exposure = max_exposure, 
-                                             initial_balance = init_balance, 
-                                             end_loss = True)
-
-# Plot the results
-one_year_monte_carlo["Percent_profit"].plot.hist(grid = True,
-                                                 bins = 20)
-
-loser_info(one_year_monte_carlo)
-
-
-
-##########################################
+loser_info(monte_carlo)
 
 
 
 
+test_buy_triggers = list(np.linspace(0, -0.4, 8)) * 2
+test_sell_triggers = [2.0, 10.0] * 8
 
-
+for i in range(1, len(test_buy_triggers) + 1):
+    
+    monte_carlo = fast_monte_carlo_test_runs(
+        data = raw_prices,
+        n_iterations = 1000,
+        min_years = 10,
+        buy_trigger = test_buy_triggers[i], 
+        sell_trigger = test_sell_triggers[i],
+        initial_balance = init_balance, 
+        assumed_annual_dividend = global_assumed_annual_dividend)
+    
+    # Plot the results
+    monte_carlo["CAGR_alpha"].plot.hist(grid = True, bins = 20)
+    
+    print(f"Buy trigger {test_buy_triggers[i]} and sell trigger {test_sell_triggers[i]} results")
+    loser_info(monte_carlo)
 
